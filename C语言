@@ -1,0 +1,1193 @@
+#include <stdio.h>
+#include <time.h>
+#include<stdlib.h>
+
+//定义扑克牌的花色
+#define SPADE 0 //黑桃
+#define HEART 1 //红桃
+#define CLUB 2 //梅花
+#define DIAMOND 3 //方块
+
+//定义扑克牌的大小
+#define TWO 0 //2
+#define THREE 1 //3
+#define FOUR 2 //4
+#define FIVE 3 //5
+#define SIX 4 //6
+#define SEVEN 5 //7
+#define EIGHT 6 //8
+#define NINE 7 //9
+#define TEN 8 //10
+#define JACK 9 //J
+#define QUEEN 10 //Q
+#define KING 11 //K
+#define ACE 12 //A
+
+//定义各牌型的等级
+#define HIGH_CARD 0 //1
+#define PAIR 1 //2
+#define TWO_PAIRS 2 //3
+#define THREE_OF_A_KIND 3 //4
+#define STRAIGHT 4 //5
+#define FLUSH 5 //6
+#define FULL_HOUSE 6 //7
+#define FOUR_OF_A_KIND 7 //8
+#define STRAIGHT_FLUSH 8 //9
+#define ROYAL_FLUSH 9 //10
+
+//定义玩家的数量
+#define PLAYER_NUM 4
+
+//定义玩家的初始筹码
+#define INIT_CHIPS 1000
+
+//定义玩家的操作类型
+#define BET 0 //下注
+#define CALL 1 //跟注
+#define RAISE 2 //加注
+#define CHECK 3 //过牌
+#define FOLD 4 //盖牌
+
+//定义一副扑克牌的数组，用二维数组表示，第一维表示花色，第二维表示大小
+int card[4][13];
+int qbest[5][2];
+
+//定义玩家的结构体，包含玩家的底牌，筹码，下注额，是否出局等信息
+typedef struct
+{
+    int hand[2][2]; //玩家的底牌，每张牌用两个整数表示花色和大小
+    int chips; //玩家的筹码
+    int bet; //玩家的下注额
+    int out; //玩家是否出局，0表示未出局，1表示出局
+} Player;
+//定义四个玩家的数组，按照固定顺序行动
+Player player[PLAYER_NUM];
+
+//定义公共牌的数组，用二维数组表示，第一维表示公共牌的数量（3-5），第二维表示每张公共牌的花色和大小
+int community[5][2];
+
+//定义当前押注圈的最大下注额和加注次数
+int max_bet;
+int raise_count;
+
+//初始化一副扑克牌，将每张牌的值设为1表示可用，0表示不可用（已发出）
+void init_card()
+{
+    int i, j;
+    for (i = 0; i < 4; i++)
+    {
+        for (j = 0; j < 13; j++)
+        {
+            card[i][j] = 1;
+        }
+    }
+}
+
+//定义一个打印一张扑克牌的函数，用花色和大小表示
+void print_card(int c, int d)
+{
+    char suit[4] = { 'S', 'H', 'C', 'D' }; //花色对应的字符
+    char rank[13] = { '2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A' }; //大小对应的字符
+    printf("%c%c ", suit[c], rank[d]); //打印花色和大小
+}
+
+//洗牌，随机从可用的扑克牌中抽取一张，并将其值设为0表示不可用（已发出）
+void shuffle(int c[2])
+{
+    int suit, rank;
+    srand(time(NULL)); //设置随机数种子
+    do
+    {
+        suit = rand() % 4; //随机选择一个花色
+        rank = rand() % 13; //随机选择一个大小
+    } while (card[suit][rank] == 0); //如果该牌已经发出，则重新选择
+
+    card[suit][rank] = 0; //将该牌设为不可用
+    c[0] = suit; //将该牌的花色赋值给c[0]
+    c[1] = rank; //将该牌的大小赋值给c[1]
+}
+
+//发牌，给每个玩家发两张底牌，然后发三张公共牌
+void deal()
+{
+    int i, j;
+    for (i = 0; i < PLAYER_NUM; i++)
+    {
+        for (j = 0; j < 2; j++)
+        {
+            shuffle(player[i].hand[j]); //给第i个玩家的第j张底牌洗牌
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        shuffle(community[i]); //给第i张公共牌洗牌
+    }
+}
+
+//得到这副手牌的牌型等级并返回等级大小
+int get_rank(int best[5][2])
+{
+    //定义一个变量，用于存储是否是同花
+    int is_flush = 0;
+    //定义一个变量，用于存储是否是顺子
+    int is_straight = 0;
+    //定义一个变量，用于存储是否是皇家同花顺
+    int is_royal_flush = 0;
+    //定义一个变量，用于存储是否是四条
+    int is_four_of_a_kind = 0;
+    //定义一个变量，用于存储是否是葫芦
+    int is_full_house = 0;
+    //定义一个变量，用于存储是否是三条
+    int is_three_of_a_kind = 0;
+    //定义一个变量，用于存储是否是两对
+    int is_two_pairs = 0;
+    //定义一个变量，用于存储是否是一对
+    int is_pair = 0;
+    //定义一个变量，用于储存是否只是一个高牌
+    int is_high_card = 0;
+    //定义一个变量，用于返回相应的牌型等级
+    int r = 0;
+
+    //定义一个数组，用于统计每种花色出现的次数
+    int suit_count[4] = { 0 };
+    //定义一个数组，用于统计每种大小出现的次数
+    int rank_count[13] = { 0 };
+
+    //遍历五张牌，统计花色和大小的次数
+    int i;
+    for (i = 0; i < 5; i++)
+    {
+        suit_count[best[i][0]]++;
+        rank_count[best[i][1]]++;
+    }
+
+    //判断是否是同花，即有一种花色出现了五次
+    for (i = 0; i < 4; i++)
+    {
+        if (suit_count[i] == 5)
+        {
+            is_flush = 1;
+            break;
+        }
+    }
+
+    //判断是否是顺子，即有五种连续的大小出现
+    for (i = 0; i < 9; i++)
+    {
+        if (rank_count[i] == 1 && rank_count[i + 1] == 1 && rank_count[i + 2] == 1 && rank_count[i + 3] == 1 && rank_count[i + 4] == 1)
+        {
+            is_straight = 1;
+            break;
+        }
+    }
+    //特殊情况：如果是A2345的顺子，也算
+    if (rank_count[ACE] == 1 && rank_count[TWO] == 1 && rank_count[THREE] == 1 && rank_count[FOUR] == 1 && rank_count[FIVE] == 1)
+    {
+        is_straight = 1;
+    }
+
+    //判断是否是皇家同花顺，即是同花且是AKQJT的顺子
+    if (is_flush && rank_count[TEN] == 1 && rank_count[JACK] == 1 && rank_count[QUEEN] == 1 && rank_count[KING] == 1 && rank_count[ACE] == 1)
+    {
+        is_royal_flush = 1;
+    }
+
+    //判断是否是四条，即有一种大小出现了四次
+    for (i = 0; i < 13; i++)
+    {
+        if (rank_count[i] == 4)
+        {
+            is_four_of_a_kind = 1;
+            break;
+        }
+    }
+
+    //判断是否是葫芦，即有一种大小出现了三次，另一种大小出现了两次
+    int three = -1; //用于记录出现三次的大小
+    int two = -1; //用于记录出现两次的大小
+    for (i = 0; i < 13; i++)
+    {
+        if (rank_count[i] == 3)
+        {
+            three = i;
+        }
+        else if (rank_count[i] == 2)
+        {
+            two = i;
+        }
+    }
+    if (three != -1 && two != -1)
+    {
+        is_full_house = 1;
+    }
+
+    //判断是否是三条，即有一种大小出现了三次
+    if (three != -1)
+    {
+        is_three_of_a_kind = 1;
+    }
+
+    //判断是否是两对，即有两种大小各自出现了两次
+    int first_two = -1; //用于记录第一对的大小
+    int second_two = -1; //用于记录第二对的大小
+    for (i = 0; i < 13; i++)
+    {
+        if (rank_count[i] == 2)
+        {
+            if (first_two == -1)
+            {
+                first_two = i;
+            }
+            else {
+                second_two = i;
+            }
+        }
+    }
+    if (first_two != -1 && second_two != -1)
+    {
+        is_two_pairs = 1;
+    }
+
+    //判断是否是一对，即有一种大小出现了两次
+    if (first_two != -1)
+    {
+        is_pair = 1;
+    }
+
+    //根据各种牌型的判断结果，返回相应的枚举值
+    if (is_royal_flush)
+    {
+        r = ROYAL_FLUSH;
+        return r;
+    }
+    else if (is_flush && is_straight)
+    {
+        r = STRAIGHT_FLUSH;
+        return r;
+    }
+    else if (is_four_of_a_kind)
+    {
+        r = FOUR_OF_A_KIND;
+        return r;
+    }
+    else if (is_full_house)
+    {
+        r = FULL_HOUSE;
+        return r;
+    }
+    else if (is_flush)
+    {
+        r = FLUSH;
+        return r;
+    }
+    else if (is_straight)
+    {
+        r = STRAIGHT;
+        return r;
+    }
+    else if (is_three_of_a_kind)
+    {
+        r = THREE_OF_A_KIND;
+        return r;
+    }
+    else if (is_two_pairs)
+    {
+        r = TWO_PAIRS;
+        return r;
+    }
+    else if (is_pair)
+    {
+        r = PAIR;
+        return r;
+    }
+    else
+    {
+        r = HIGH_CARD;
+        return r;
+    }
+}
+
+//比较两副同花顺或顺子的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等bingo
+int compare_straight(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的最大点数
+    int max1 = 0;
+    int max2 = 0;
+    //遍历五张牌，找出最大点数
+    int i;
+    for (i = 0; i < 5; i++)
+    {
+        if (best1[i][1] > max1)
+        {
+            max1 = best1[i][1];
+        }
+        if (best2[i][1] > max2)
+        {
+            max2 = best2[i][1];
+        }
+    }
+    //特殊情况：如果是A2345的顺子，那么最大点数为5
+    if (best1[0][1] == ACE && best1[4][1] == FIVE)
+    {
+        max1 = FIVE;
+    }
+    if (best2[0][1] == ACE && best2[4][1] == FIVE)
+    {
+        max2 = FIVE;
+    }
+    //比较两个最大点数的大小，并返回相应的值
+    if (max1 > max2)
+    {
+        return 1;
+    }
+    else if (max1 < max2)
+    {
+        return -1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+//比较两副四条的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等bingo
+int compare_four(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的四条的点数
+    int four1 = 0;
+    int four2 = 0;
+    //定义两个变量，分别存储两副牌的剩下一张牌的点数
+    int one1 = 0;
+    int one2 = 0;
+
+    //判断第一副牌的四条和剩下一张牌的点数
+    if (best1[0][1] == best1[3][1])
+    { //如果前四张牌相同，则为四条的点数
+        four1 = best1[0][1];
+        one1 = best1[4][1]; //最后一张牌为剩下一张牌的点数
+    }
+    else { //否则后四张牌相同，则为四条的点数
+        four1 = best1[4][1];
+        one1 = best1[0][1]; //第一张牌为剩下一张牌的点数
+    }
+
+    //判断第二副牌的四条和剩下一张牌的点数
+    if (best2[0][1] == best2[3][1])
+    { //如果前四张牌相同，则为四条的点数
+        four2 = best2[0][1];
+        one2 = best2[4][1]; //最后一张牌为剩下一张牌的点数
+    }
+    else { //否则后四张牌相同，则为四条的点数
+        four2 = best2[4][1];
+        one2 = best2[0][1]; //第一张牌为剩下一张牌的点数
+    }
+
+    //比较两个四条的点数大小，并返回相应的值
+    if (four1 > four2)
+    {
+        return 1;
+    }
+    else if (four1 < four2)
+    {
+        return -1;
+    }
+    else { //如果两个四条的点数相同，则比较剩下一张牌的点数大小，并返回相应的值
+        if (one1 > one2)
+        {
+            return 1;
+        }
+        else if (one1 < one2)
+        {
+            return -1;
+        }
+        else {
+            return 0;
+        }
+    }
+}
+
+//比较两副葫芦的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等bingo
+int compare_full(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的三条的点数
+    int three1 = 0;
+    int three2 = 0;
+    //定义两个变量，分别存储两副牌的对子的点数
+    int two1 = 0;
+    int two2 = 0;
+
+    //判断第一副牌的三条和对子的点数
+    if (best1[0][1] == best1[2][1])
+    { //如果前三张牌相同，则为三条的点数
+        three1 = best1[0][1];
+        two1 = best1[4][1]; //最后两张牌为对子的点数
+    }
+    else { //否则后三张牌相同，则为三条的点数
+        three1 = best1[4][1];
+        two1 = best1[0][1]; //前两张牌为对子的点数
+    }
+
+    //判断第二副牌的三条和对子的点数
+    if (best2[0][1] == best2[2][1])
+    { //如果前三张牌相同，则为三条的点数
+        three2 = best2[0][1];
+        two2 = best2[4][1]; //最后两张牌为对子的点数
+    }
+    else { //否则后三张牌相同，则为三条的点数
+        three2 = best2[4][1];
+        two2 = best2[0][1]; //前两张牌为对子的点数
+    }
+
+    //比较两个三条的点数大小，并返回相应的值
+    if (three1 > three2)
+    {
+        return 1;
+    }
+    else if (three1 < three2)
+    {
+        return -1;
+    }
+    else { //如果两个三条的点数相同，则比较对子的点数大小，并返回相应的值
+        if (two1 > two2)
+        {
+            return 1;
+        }
+        else if (two1 < two2)
+        {
+            return -1;
+        }
+        else {
+            return 0;
+        }
+    }
+}
+
+//比较两副同花的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等   自己写的，bingo
+int compare_flush(int best1[5][2], int best2[5][2])
+{
+    //定义两个数组，用于存储双方每种大小出现的次数
+    int rank_count1[13] = { 0 };
+    int rank_count2[13] = { 0 };
+
+    //遍历第一副牌，统计每种大小出现的次数
+    int i;
+    for (i = 0; i < 5; i++)
+    {
+        rank_count1[best1[i][1]]++;
+    }
+    //遍历第二副牌，统计每种大小出现的次数
+    for (i = 0; i < 5; i++)
+    {
+        rank_count2[best1[i][1]]++;
+    }
+    //倒序查看二者次数是否有差，有差则能得出胜负，没有则平局
+    for (i = 12; i >= 0; i--)
+    {
+        if (rank_count1 > rank_count2)
+        {
+            return 1;
+        }
+        else if (rank_count1 < rank_count2)
+        {
+            return -1;
+        }
+        else
+        {
+        }
+    }
+    return 0;
+}
+
+//比较两副三条的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等	大修bingo
+int compare_three(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的三条的点数
+    int three1 = 0;
+    int three2 = 0;
+    //定义两个变量，分别存储两副牌的剩下两张牌的点数之和
+    int sum1 = 0;
+    int sum2 = 0;
+
+    //判断第一副牌的三条和剩下两张牌的点数
+    if (best1[0][1] == best1[2][1])
+    { //如果前三张牌相同，则为三条的点数
+        three1 = best1[0][1];
+        sum1 = best1[3][1] + best1[4][1]; //最后两张牌为剩下两张牌的点数之和
+    }
+    else if (best1[3][1] == best1[4][1])
+    { //如果后三张牌相同，则为三条的点数
+        three1 = best1[4][1];
+        sum1 = best1[0][1] + best1[1][1]; //前两张牌为剩下两张牌的点数之和
+    }
+    else
+    { //否则中间三张牌相同，则为三条的点数
+        three1 = best1[3][1];
+        sum1 = best1[0][1] + best1[4][1]; //第一张和最后一张牌为剩下两张牌的点数之和
+    }
+
+    //判断第二副牌的三条和剩下两张牌的点数
+    if (best2[0][1] == best2[2][1])
+    { //如果前三张牌相同，则为三条的点数
+        three2 = best2[0][1];
+        sum2 = best2[3][1] + best2[4][1]; //最后两张牌为剩下两张牌的点数之和
+    }
+    else if (best2[3][1] == best2[4][1])
+    { //如果后三张牌相同，则为三条的点数
+        three2 = best2[4][1];
+        sum2 = best2[0][1] + best2[1][1]; //前两张牌为剩下两张牌的点数之和
+    }
+    else
+    { //否则中间三张牌相同，则为三条的点数
+        three2 = best2[3][1];
+        sum2 = best2[0][1] + best2[4][1]; //第一张和最后一张牌为剩下两张牌的点数之和
+    }
+
+    //比较两个三条的点数大小，并返回相应的值
+    if (three1 > three2)
+    {
+        return 1;
+    }
+    else if (three1 < three2)
+    {
+        return -1;
+    }
+    else
+    { //如果两个三条的点数相同，则比较剩下两张牌的点数之和大小，并返回相应的值
+        if (sum1 > sum2)
+        {
+            return 1;
+        }
+        else if (sum1 < sum2)
+        {
+            return -1;
+        }
+        else
+        {
+            return 0;
+        }
+    }
+}
+
+//比较两副两对的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等   自己写的，bingo
+int compare_two_pairs(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的最大对子的点数
+    int max_pair1 = 0;
+    int max_pair2 = 0;
+    //定义两个变量，分别存储两副牌的第二大对子的点数
+    int second_pair1 = 0;
+    int second_pair2 = 0;
+    //定义两个变量，分别存储两副牌的剩下一张牌的点数
+    int one1 = 0;
+    int one2 = 0;
+
+    //在best1中判断两个两对的位置，分别储存在两个变量中
+    second_pair1 = best1[0][1];
+    max_pair1 = best1[3][1];
+    if (best1[0][1] == best1[1][1])
+    {
+        if (best1[2][1] == best1[3][1])
+        {
+            one1 = best1[4][1];
+        }
+        else
+        {
+            one1 = best1[2][1];
+        }
+    }
+    else
+    {
+        one1 = best1[0][1];
+    }
+    //在best2中判断两个两对的位置，分别储存在两个变量中
+    second_pair2 = best2[0][1];
+    max_pair2 = best2[3][1];
+    if (best2[0][1] == best2[1][1])
+    {
+        if (best2[2][1] == best2[3][1])
+        {
+            one2 = best2[4][1];
+        }
+        else
+        {
+            one2 = best2[2][1];
+        }
+    }
+    else
+    {
+        one2 = best2[0][1];
+    }
+    //开始比较
+    if (max_pair1 > max_pair2)
+    {
+        return 1;
+    }
+    else if (max_pair1 < max_pair2)
+    {
+        return -1;
+    }
+    else if (second_pair1 > second_pair2)
+    {
+        return 1;
+    }
+    else if (second_pair1 < second_pair2)
+    {
+        return -1;
+    }
+    else if (one1 > one2)
+    {
+        return 1;
+    }
+    else if (one1 < one2)
+    {
+        return -1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+//比较两副一对的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等   大修，bingo
+int compare_pair(int best1[5][2], int best2[5][2])
+{
+    //定义两个变量，分别存储两副牌的对子的点数
+    int pair1 = 0;
+    int pair2 = 0;
+    //定义两个变量，分别存储两副牌的剩下三张牌的点数之和
+    int sum1 = 0;
+    int sum2 = 0;
+
+    //判断第一副牌的对子和剩下三张牌的点数
+    if (best1[0][1] == best1[1][1])
+    { //如果前两张牌相同，则为对子的点数
+        pair1 = best1[0][1];
+        sum1 = best1[2][1] + best1[3][1] + best1[4][1]; //最后三张牌为剩下三张牌的点数之和
+    }
+    else if (best1[3][3] == best1[4][1])
+    { //如果后两张牌相同，则为对子的点数
+        pair1 = best1[4][1];
+        sum1 = best1[0][1] + best1[1][1] + best1[2][1]; //前三张牌为剩下三张牌的点数之和
+    }
+    else if (best1[1][1] == best1[2][1])
+    {
+        pair1 = best1[1][1];
+        sum1 = best1[0][1] + best1[3][1] + best1[4][1]; //第一张，第四张和第五张牌为剩下三张牌的点数之和
+    }
+    else
+    {
+        pair1 = best1[2][1];
+        sum1 = best1[0][1] + best1[1][1] + best1[4][1];
+    }
+
+    //判断第二副牌的对子和剩下三张牌的点数
+    if (best2[0][1] == best2[1][1])
+    { //如果前两张牌相同，则为对子的点数
+        pair2 = best2[0][1];
+        sum2 = best2[2][1] + best2[3][1] + best2[4][1]; //最后三张牌为剩下三张牌的点数之和
+    }
+    else if (best2[3][3] == best2[4][1])
+    { //如果后两张牌相同，则为对子的点数
+        pair2 = best2[4][1];
+        sum2 = best2[0][1] + best2[1][1] + best2[2][1]; //前三张牌为剩下三张牌的点数之和
+    }
+    else if (best2[1][1] == best2[2][1])
+    {
+        pair2 = best2[1][1];
+        sum2 = best2[0][1] + best2[3][1] + best2[4][1]; //第一张，第四张和第五张牌为剩下三张牌的点数之和
+    }
+    else
+    {
+        pair2 = best2[2][1];
+        sum2 = best2[0][1] + best2[1][1] + best2[4][1];
+    }
+
+    //比较两个对子的点数大小，并返回相应的值
+    if (pair1 > pair2)
+    {
+        return 1;
+    }
+    else if (pair1 < pair2)
+    {
+        return -1;
+    }
+    else { //如果两个对子的点数相同，则比较剩下三张牌的点数之和大小，并返回相应的值
+        if (sum1 > sum2)
+        {
+            return 1;
+        }
+        else if (sum1 < sum2)
+        {
+            return -1;
+        }
+        else
+        {
+            return 0;
+        }
+    }
+}
+
+//比较两副高牌的大小，返回1表示第一副大，-1表示第二副大，0表示两副相等   和同花的情况是一样的bingo
+int compare_high(int best1[5][2], int best2[5][2])
+{
+    //定义两个数组，用于存储双方每种大小出现的次数
+    int rank_count1[13] = { 0 };
+    int rank_count2[13] = { 0 };
+
+    //遍历第一副牌，统计每种大小出现的次数
+    int i;
+    for (i = 0; i < 5; i++)
+    {
+        rank_count1[best1[i][1]]++;
+    }
+    //遍历第二副牌，统计每种大小出现的次数
+    for (i = 0; i < 5; i++)
+    {
+        rank_count2[best1[i][1]]++;
+    }
+    //倒序查看二者次数是否有差，有差则能得出胜负，没有则平局
+    for (i = 12; i >= 0; i--)
+    {
+        if (rank_count1 > rank_count2)
+        {
+            return 1;
+        }
+        else if (rank_count1 < rank_count2)
+        {
+            return -1;
+        }
+        else
+        {
+        }
+    }
+    return 0;
+}
+
+//定义一个比较两手牌大小的函数，输入参数为两个玩家的编号，返回值为1表示第一个玩家胜利，-1表示第二个玩家胜利，0表示平局
+int compare(int best1[5][2], int best2[5][2])
+{
+    int r = 0;
+    int rank1 = get_rank(best1);
+    int rank2 = get_rank(best2);
+
+    //如果两个玩家的牌型不同，则直接比较牌型大小，并返回相应的值
+    if (rank1 != rank2)
+    {
+        if (rank1 > rank2)
+        {
+            return 1;
+        }
+        else
+        {
+            return -1;
+        }
+    }
+
+    //如果两个玩家的牌型相同，则需要比较点数大小或踢脚大小
+    switch (rank1)
+    {
+    case ROYAL_FLUSH: //如果都是皇家同花顺，则平局
+        return 0;
+    case STRAIGHT_FLUSH: //如果都是同花顺，则比较最大点数
+        r = compare_straight(best1, best2);
+        return r;
+    case FOUR_OF_A_KIND: //如果都是四条，则比较四条的点数，如果相同，则比较剩下一张的点数
+        r = compare_four(best1, best2);
+        return r;
+    case FULL_HOUSE: //如果都是葫芦，则比较三条的点数，如果相同，则比较对子的点数
+        r = compare_full(best1, best2);
+        return r;
+    case FLUSH: //如果都是同花，则比较五张牌中的最大点数，如果相同，则比较第二大点数，以此类推
+        r = compare_flush(best1, best2);
+        return r;
+    case STRAIGHT: //如果都是顺子，则比较最大点数
+        r = compare_straight(best1, best2);
+        return r;
+    case THREE_OF_A_KIND: //如果都是三条，则比较三条的点数，如果相同，则比较剩下两张中的最大点数，如果相同，则比较剩下一张的点数
+        r = compare_three(best1, best2);
+        return r;
+    case TWO_PAIRS: //如果都是两对，则比较最大对子的点数，如果相同，则比较第二大对子的点数，如果相同，则比较剩下一张的点数
+        r = compare_two_pairs(best1, best2);
+        return r;
+    case PAIR: //如果都是一对，则比较对子的点数，如果相同，则比较剩下三张中的最大点数，如果相同，则比较第二大点数，如果相同，则比较剩下一张的点数
+        r = compare_pair(best1, best2);
+        return r;
+    case HIGH_CARD: //如果都是高牌，则比较五张牌中的最大点数，如果相同，则比较第二大点数，以此类推
+        r = compare_high(best1, best2);
+        return r;
+    }
+}
+
+//从一副七张手牌中选出最好的五张牌组合，并存储到best数组中bingo
+void select_best(int hand[7][2])
+{
+    //定义一个临时数组，用于存储当前的五张牌组合
+    int temp[5][2];
+    int best[5][2];
+    //定义三个循环变量，用于遍历所有可能的五张牌组合
+    int i, j;
+    int index = 0;
+    //从七张手牌中任意选出五张牌组合，共有C(7,5)=21种可能
+    for (i = 0; i < 3; i++)
+    {
+        for (j = i + 1, index = 0; j < 4; j++)
+        {
+
+            //将除了第i,j张牌之外的其他五张牌存储到临时数组中
+
+            int m;
+            for (m = 0; m < 7; m++)
+            {
+                if (m != i && m != j)
+                {
+                    temp[index][0] = hand[m][0];
+                    temp[index][1] = hand[m][1];
+                    index++;
+                }
+            }
+            if (compare(best, temp) == -1)
+            {
+                best[5][2] = temp[5][2];//这里应该加个指针来把主函数里的数组改掉//不是在这里，是在后面的copy_card函数里
+            }
+
+        }
+    }
+    for (i = 0; i < 5; i++)
+    {
+        for (j = 0; j < 2; j++)
+        {
+            qbest[i][j] = best[i][j];
+        }
+    }
+}
+
+//在五张手牌中把扑克牌从小到大排序
+void copy_card(int best[5][2], int morebest[5][2])
+{
+    int temp[2];
+    // 将best中的五张牌复制到morebest中
+    for (int i = 0; i < 5; i++)
+    {
+        morebest[i][0] = best[i][0];
+        morebest[i][1] = best[i][1];
+    }
+
+    // 根据点数从小到大排序
+    for (int i = 0; i < 5; i++)
+    {
+        for (int j = i + 1; j < 5; j++)
+        {
+            if (morebest[j][1] < morebest[i][1])
+            {
+                temp[0] = morebest[i][0];
+                temp[1] = morebest[i][0];
+                morebest[i][0] = morebest[j][0];
+                morebest[i][1] = morebest[j][1];
+                morebest[j][0] = temp[0];
+                morebest[j][1] = temp[1];
+            }
+        }
+    }
+}
+
+//判断这位玩家是否胜利
+int is_win(int id)
+{
+    int i, j;
+    int hand[7][2]; //玩家的最终手牌，包括两张底牌和五张公共牌
+    int result; //比较结果
+    int best1[5][2], best2[5][2];
+
+    //将玩家的底牌和公共牌合并为一副手牌
+    for (i = 0; i < 2; i++)
+    {
+        hand[i][0] = player[id].hand[i][0];
+        hand[i][1] = player[id].hand[i][1];
+    }
+    for (i = 2; i < 7; i++)
+    {
+        hand[i][0] = community[i - 2][0];
+        hand[i][1] = community[i - 2][1];
+    }
+    //与其他未出局的玩家的手牌进行比较
+    for (i = 0; i < PLAYER_NUM; i++)
+    {
+        if (i != id && player[i].out == 0)
+        { //如果不是自己且未出局
+            int other_hand[7][2]; //其他玩家的最终手牌
+            //将其他玩家的底牌和公共牌合并为一副手牌
+            for (j = 0; j < 2; j++)
+            {
+                other_hand[j][0] = player[i].hand[j][0];
+
+                other_hand[j][1] = player[i].hand[j][1];
+            }
+            for (j = 2; j < 7; j++)
+            {
+                other_hand[j][0] = community[j - 2][0];
+                other_hand[j][1] = community[j - 2][1];
+            }
+            //得到七张手牌中能组成最大牌型的牌型
+            select_best(hand);
+
+            {
+                for (j = 0; j < 2; j++)
+                {
+                    best1[i][j] = qbest[i][j];
+                }
+            }
+            select_best(other_hand);
+            for (i = 0; i < 5; i++)
+            {
+                for (j = 0; j < 2; j++)
+                {
+                    best2[i][j] = qbest[i][j];
+                }
+            }
+
+
+            //比较两副手牌的大小
+            result = compare(best1, best2);
+            if (result == -1)
+            { //如果自己的手牌小于其他玩家的手牌，则返回-1表示失败
+                return -1;
+            }
+        }
+    }
+
+    //如果没有比自己的手牌小的玩家，则返回比较结果（可能是胜利或平局）
+    return result;
+}
+
+//主函数
+int main()
+{
+    int round; //当前局数
+    int stage; //当前押注圈（0表示翻拍圈，1表示转牌圈，2表示河牌圈）
+    int turn; //当前行动轮次（从小盲注开始）
+    int action; //玩家的操作类型
+    int amount; //玩家的操作金额
+    int i, j;
+
+    //初始化游戏
+    round = 0; //局数从0开始
+    for (i = 0; i < PLAYER_NUM; i++)
+    {
+        player[i].chips = INIT_CHIPS; //每个玩家的初始筹码为1000
+        player[i].out = 0; //每个玩家都未出局
+    }
+
+    //循环进行每一局游戏，直到用户退出
+    while (1)
+    {
+        round++; //局数加一
+        printf("Round %d begins.\n", round); //打印当前局数
+
+        //初始化一副扑克牌
+        init_card();
+
+        //发牌，给每个玩家发两张底牌，然后发三张公共牌
+        deal();
+
+        //初始化当前押注圈的最大下注额和加注次数
+        max_bet = 1;
+        raise_count = 0;
+
+        //循环进行每个押注圈，直到河牌圈结束或只剩下一个未出局的玩家
+        for (stage = 0; stage < 3; stage++)
+        {
+            printf("Stage %d begins.\n", stage); //打印当前押注圈
+
+            //如果是转牌圈或河牌圈，则再发一张公共牌
+            if (stage > 0)
+            {
+                shuffle(community[stage + 2]);
+            }
+
+            //循环进行每个玩家的操作，直到所有未出局的玩家的下注额相等或只剩下一个未出局的玩家
+            turn = 0; //行动轮次从小盲注开始
+            while (1)
+            {
+                i = turn % PLAYER_NUM; //计算当前行动的玩家编号
+                if (player[i].out == 0)
+                { //如果该玩家未出局，则进行操作
+                    printf("This is the round %d\n", stage);
+                        printf("You are the player %d\n", (i + 1));
+
+                    //打印当前自己的底牌和当前翻开的公共牌
+                    printf("Your hand cards are:\n");
+                    for (j = 0; j < 2; j++)
+                    {
+                        print_card(player[i].hand[j][0], player[i].hand[j][1]);
+                    }
+                    printf("\n");
+                    printf("The community cards are:\n");
+                    for (j = 0; j < stage + 3; j++)
+                    {
+                        print_card(community[j][0], community[j][1]);
+                    }
+                    printf("\n");
+
+                    //打印玩家可进行的操作，并由玩家输入操作并执行
+                    printf("Your available actions are:\n");
+                    if (player[i].bet < max_bet)
+                    { //如果该玩家的下注额小于最大下注额，则可以选择跟注或盖牌
+                        printf("%d: Call\n", CALL);
+                        printf("%d: Fold\n", FOLD);
+                        scanf_s("%d", &action); //输入操作类型
+                        if (action == CALL)
+                        { //如果选择跟注，则将该玩家的下注额设为最大下注额，并从其筹码中扣除相应金额
+                            amount = max_bet - player[i].bet;
+                            player[i].bet = max_bet;
+                            player[i].chips -= amount;
+                            printf("You call %d chips.\n", amount);
+                        }
+                        else if (action == FOLD)
+                        { //如果选择盖牌，则将该玩家设为出局
+                            player[i].out = 1;
+                            printf("You fold.\n");
+                        }
+                        else
+                        { //如果输入无效的操作类型，则提示错误并重新输入
+                            printf("Invalid action. Please enter again.\n");
+                            turn--; //行动轮次不变
+                        }
+                    }
+                    else
+                    { //如果该玩家的下注额等于最大下注额，则可以选择过牌，加注或盖牌
+                        printf("%d: Check\n", CHECK);
+                        if (raise_count < 3)
+                        { //如果当前押注圈的加注次数小于3，则可以选择加注
+                            printf("%d: Raise\n", RAISE);
+                        }
+                        printf("%d: Fold\n", FOLD);
+                        scanf_s("%d", &action); //输入操作类型
+                        if (action == CHECK)
+                        { //如果选择过牌，则不做任何改变
+                            printf("You check.\n");
+                        }
+                        else if (action == RAISE && raise_count < 3)
+                        { //如果选择加注且加注次数小于3，则输入加注金额，并将该玩家的下注额增加相应金额，并从其筹码中扣除相应金额，同时更新最大下注额和加注次数
+                            printf("Please enter the raise amount:\n");
+                            scanf_s("%d", &amount); //输入加注金额
+                            if (amount > 0 && amount <= player[i].chips)
+                            { //如果加注金额合法，则执行加注操作
+                                player[i].bet += amount;
+                                player[i].chips -= amount;
+                                max_bet = player[i].bet;
+                                raise_count++;
+                                printf("You raise %d chips.\n", amount);
+                            }
+                            else { //如果加注金额不合法，则提示错误并重新输入
+                                printf("Invalid amount. Please enter again.\n");
+                                turn--; //行动轮次不变
+                            }
+                        }
+                        else if (action == FOLD)
+                        { //如果选择盖牌，则将该玩家设为出局
+                            player[i].out = 1;
+                            printf("You fold.\n");
+                        }
+                        else
+                        { //如果输入无效的操作类型，则提示错误并重新输入
+                            printf("Invalid action. Please enter again.\n");
+                            turn--; //行动轮次不变
+                        }
+                    }
+                }
+
+                turn++; //行动轮次加一
+
+                //判断是否满足结束当前押注圈的条件，即所有未出局的玩家的下注额相等或只剩下一个未出局的玩家
+                int count = 0; //统计未出局的玩家数量
+                int equal = 1; //标记所有未出局的玩家的下注额是否相等
+                for (i = 0; i < PLAYER_NUM; i++)
+                {
+                    if (player[i].out == 0)
+                    {
+                        count++;
+                        if (player[i].bet != max_bet && player[i].chips > 0)
+                        {
+                            equal = 0;
+                        }
+                    }
+                }
+                if (count == 1 || equal == 1)
+                {
+                    break; //结束当前押注圈
+                }
+            }
+
+            //判断是否满足结束当前局游戏的条件，即只剩下一个未出局的玩家
+            int count = 0; //统计未出局的玩家数量
+            int winner = -1; //记录胜利者的编号（-1表示无胜利者）
+            for (i = 0; i < PLAYER_NUM; i++)
+            {
+                if (player[i].out == 0)
+                {
+                    count++;
+                    winner = i;
+                }
+            }
+            if (count == 1)
+            {
+                break; //结束当前局游戏
+            }
+        }
+
+        //判断每个玩家是否胜利，并根据结果改变玩家的筹码，打印结果信息
+        printf("Round %d ends.\n", round); //打印当前局数
+        int pot = 0; //记录总奖池金额
+        for (i = 0; i < PLAYER_NUM; i++)
+        {
+            pot += player[i].bet; //将每个玩家的下注额累加到总奖池
+            player[i].bet = 0; //将每个玩家的下注额清零
+        }
+        int win_count = 0; //记录胜利者的数量
+        int winner[PLAYER_NUM]; //记录胜利者的编号
+        for (i = 0; i < PLAYER_NUM; i++)
+        {
+            if (player[i].out == 0)
+            { //如果该玩家未出局，则判断是否胜利
+                int result = is_win(i); //调用判断是否胜利的函数，返回1表示胜利，-1表示失败，0表示平局
+                if (result == 1)
+                { //如果胜利，则将该玩家加入胜利者数组，并增加胜利者数量
+                    winner[win_count] = i;
+                    win_count++;
+                }
+            }
+        }
+        if (win_count > 0)
+        { //如果有胜利者，则平分奖池，并打印结果信息
+            int share = pot / win_count; //计算每个胜利者的奖金
+            for (i = 0; i < win_count; i++)
+            {
+                player[winner[i]].chips += share; //将奖金加到每个胜利者的筹码中
+                printf("Player %d wins %d chips.\n", winner[i], share); //打印每个胜利者的编号和奖金
+            }
+        }
+        else { //如果没有胜利者，则打印平局信息
+            printf("It's a tie.\n");
+        }
+
+        //判断是否有玩家的筹码归为零，如果是，则重新拥有1000点筹码，并打印提示信息
+        for (i = 0; i < PLAYER_NUM; i++)
+        {
+            if (player[i].chips == 0)
+            {
+                player[i].chips = INIT_CHIPS;
+                printf("Player %d has no chips left. Reset to %d chips.\n", i, INIT_CHIPS);
+            }
+        }
+
+        //询问用户是否继续游戏，如果输入N或n，则退出游戏，否则继续游戏
+        printf("Do you want to continue the game? (Y/N)\n");
+        char c;
+        scanf_s("%c", &c); //输入字符
+        if (c == 'N' || c == 'n')
+        {
+            break; //退出游戏
+        }
+    }
+
+    return 0;
+}
